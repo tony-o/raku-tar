@@ -7,7 +7,7 @@ sub tar(*@fs, Str :$prefix = '' --> Buf[uint8]) is export {
     die "{$f.relative} does not exist" unless $f.e;
 
     #setup
-    my $force-pax = try { $prefix ~ $f.relative ~ ($f.d ??'/'!!'')).encode('ascii') } ?? False !! True;
+    my $force-pax = try { ($prefix ~ $f.relative ~ ($f.d ??'/'!!'')).encode('ascii') } ?? False !! True;
     my $filename = ($prefix ~ $f.relative ~ ($f.d ??'/'!!'')).encode('ascii', :replacement<->);
     my $bytes = ($f.l ?? $f.resolve !! $f.slurp(:bin)) unless $f.d;
     my Buf[uint8] $tarf .=new;
