@@ -1,0 +1,15 @@
+{
+  "auth": "zef:tonyo",
+  "build-depends": [
+  ],
+  "depends": [
+  ],
+  "description": "Pure raku tar creation module",
+  "name": "TAR",
+  "provides": {
+    "TAR": "lib/TAR.rakumod"
+  },
+  "resources": [
+  ],
+  "ver": "0.0.1"
+}
