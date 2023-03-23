@@ -106,3 +106,134 @@ sub tar(*@fs, Str :$prefix = '' --> Buf[uint8]) is export {
 
   $tar;
 }
+
+class IO::Tar does IO {
+  has $!size;
+  has $!file-type;
+  has $!offset;
+  has $!filename;
+  has $!input-file;
+  has %!pax-header;
+  has $!to;
+
+  submethod BUILD(
+    :$!offset,
+    :$!input-file,
+    :$!filename,
+    :$!file-type,
+    :$!size = 0,
+    :$!to = '',
+    :%!pax-header = {}) {
+
+  }
+
+  method name(--> Str)     { %!pax-header<path> // $!filename.IO.basename; }
+  method basename(--> Str) { %!pax-header<path>.IO.basename // $!filename.IO.basename; };
+
+  method d(--> Bool) { $!file-type eq '5'; }
+  method l(--> Bool) { $!file-type eq '2'; }
+  method f(--> Bool) { $!file-type eq '0'; }
+
+  method to(--> Str)     { $!to;     }
+  method size(--> Int)   { $!size;   }
+  method offset(--> Int) { $!offset; }
+
+  method slurp(Bool:D :$binary = False) {
+    die "{$!input-file} does not exist" unless $!input-file.f;
+    my Buf[uint8] $bs = $!input-file.slurp(:bin);
+    $binary
+      ?? $bs.subbuf($!offset, $!size)
+      !! $bs.subbuf($!offset, $!size).decode;
+  }
+}
+
+sub tar-ls(IO() $input-file --> List) is export {
+  die "{$input-file} does not exist" unless $input-file.f;
+  my Buf[uint8] $bs = $input-file.slurp(:bin);
+  my $offset        = 0;
+  my $len           = $bs.elems;
+  my $trailer       = 0;
+  my %pax-header;
+
+  my @fs;
+
+  while $offset < $len {
+    my $filename  = S/\0+$// given $bs.subbuf($offset, 100).decode('ascii');
+    my $size      = try { "0o{$bs.subbuf($offset + 124, 11).decode('ascii')}".Int } // -1;
+    my $file-type = $bs.subbuf($offset + 156, 1).decode('ascii'); 
+
+    if $filename eq '' && $size ~~ -1 {
+      $trailer++;
+      last if $trailer >= 2;
+      $offset += 512;
+      next;
+    }
+
+    if $file-type eq 'x' { #pax header
+      %pax-header = ();
+      $offset += 512;
+      my $to-decode = $bs.subbuf($offset, $size);
+      my $decode-i = 0;
+      my $decode-j = 0;
+      my $decode-l = $to-decode.elems;
+      while $decode-i < $decode-l {
+        while $to-decode[$decode-j] ne ' ' {
+          $decode-j++;
+        }
+        $decode-j++;
+        my $blob-size = $to-decode.slice($decode-i, $decode-j).Int;
+        my $blob = $to-decode.subbuf($decode-j, $blob-size);
+        $decode-i = $decode-j + $blob-size;
+        dd $blob;
+      }
+      $offset += $size;
+      $offset  = ceiling($offset / 512) * 512;
+    } elsif $file-type eq '0' { #regular file
+      $offset += 512;
+      @fs.push(IO::Tar.new(
+        :$input-file,
+        :$offset,
+        :$filename,
+        :$size,
+        :$file-type,
+        :%pax-header,
+      ));
+      $offset = ceiling(($size+$offset) / 512) * 512;
+      %pax-header = ();
+    } elsif $file-type eq '5' { #dir
+      @fs.push(IO::Tar.new(
+        :$input-file,
+        :$offset,
+        :$filename,
+        :size(0),
+        :$file-type,
+        :%pax-header,
+      ));
+      $offset += 512;
+      %pax-header = ();
+    } elsif $file-type eq '2' { #link
+      $offset += 512;
+      my $to = $bs.subbuf($offset, $size);
+      @fs.push(IO::Tar.new(
+        :$input-file,
+        :$offset,
+        :$filename,
+        :$size,
+        :$file-type,
+        :$to,
+        :%pax-header,
+      ));
+      $offset = ceiling(($size+$offset) / 512) * 512;
+      %pax-header = ();
+    }
+  }
+  @fs;
+}
+
+sub tar-cat(Str:D $input-file, Str:D $path, Bool:D :$binary = False) is export {
+  tar-ls($input-file).grep(*.name eq $path).first.slurp(:$binary);
+}
+
+sub extract(Str:D $input-file, Str:D $output-path) is export {
+  tar-ls($input-file).map({ $output-path.IO.add($_).spurt(tar-cat($input-file, $_, :binary), :binary) });
+}
